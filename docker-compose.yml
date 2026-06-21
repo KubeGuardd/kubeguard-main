@@ -1,0 +1,156 @@
+﻿version: '3.9'
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: kubeguard-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  project-service:
+    build:
+      context: ./project-service
+      dockerfile: Dockerfile
+    container_name: kubeguard-project
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    env_file:
+      - ./project-service/.env.docker
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  watcher-service:
+    build:
+      context: ./watcher-service
+      dockerfile: Dockerfile
+    container_name: kubeguard-watcher
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    env_file:
+      - ./watcher-service/.env.docker
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      project-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  analysis-service:
+    build:
+      context: ./analysis-service
+      dockerfile: Dockerfile
+    container_name: kubeguard-analysis
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    env_file:
+      - ./analysis-service/.env.docker
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      project-service:
+        condition: service_healthy
+      watcher-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3003/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  notification-service:
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile
+    container_name: kubeguard-notification
+    restart: unless-stopped
+    ports:
+      - "3004:3004"
+    env_file:
+      - ./notification-service/.env.docker
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      project-service:
+        condition: service_healthy
+      watcher-service:
+        condition: service_healthy
+      analysis-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3004/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: kubeguard-gateway
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./gateway/.env.docker
+    depends_on:
+      project-service:
+        condition: service_healthy
+      watcher-service:
+        condition: service_healthy
+      analysis-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_AZURE_CLIENT_ID: ""
+        VITE_AZURE_TENANT_ID: ""
+        VITE_AZURE_REDIRECT_URI: ""
+        VITE_API_BASE_URL: ""
+    container_name: kubeguard-frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+volumes:
+  mongodb_data:
+    driver: local
