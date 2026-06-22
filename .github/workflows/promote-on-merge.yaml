@@ -8,7 +8,7 @@ on:
 jobs:
   promote:
     if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'dev'
-    uses: KubeGuardd/kubeguard-main/.github/workflows/promote-prod.yaml@main
+    uses: KubeGuardd/kubeguard-main/.github/workflows/promote-prod.yml@main
     secrets:
       ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
       ACR_USERNAME: ${{ secrets.ACR_USERNAME }}

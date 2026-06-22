@@ -163,7 +163,7 @@ jobs:
   notify-success:
     needs: [detect-changed-services, promote]
     if: needs.promote.result == 'success'
-    uses: KubeGuardd/kubeguard-main/.github/workflows/notify.yaml@main
+    uses: KubeGuardd/kubeguard-main/.github/workflows/notify.yml@main
     with:
       service_name: ${{ join(fromJson(needs.detect-changed-services.outputs.services), ', ') }}
       stage: "promote-prod"
@@ -178,7 +178,7 @@ jobs:
   notify-failure:
     needs: [detect-changed-services, promote]
     if: always() && needs.promote.result == 'failure'
-    uses: KubeGuardd/kubeguard-main/.github/workflows/notify.yaml@main
+    uses: KubeGuardd/kubeguard-main/.github/workflows/notify.yml@main
     with:
       service_name: ${{ join(fromJson(needs.detect-changed-services.outputs.services), ', ') }}
       stage: "promote-prod"
