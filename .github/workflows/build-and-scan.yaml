@@ -26,6 +26,10 @@ on:
         required: false
         type: string
         default: ""
+      snyk_enabled:
+        required: false
+        type: string
+        default: "false"
       trivy_severity:
         required: false
         type: string
@@ -86,7 +90,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      - if: ${{ secrets.SNYK_TOKEN != '' }}
+      - if: ${{ inputs.snyk_enabled == 'true' }}
         uses: snyk/actions/node@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}

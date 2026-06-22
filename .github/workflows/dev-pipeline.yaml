@@ -63,6 +63,43 @@ jobs:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
+  sync-to-main:
+    needs: build
+    if: needs.build.outputs.status == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: service-repo
+
+      - uses: actions/checkout@v4
+        with:
+          repository: KubeGuardd/kubeguard-main
+          ref: dev
+          token: ${{ secrets.HELM_REPO_PAT }}
+          path: main-repo
+
+      - name: Sync service code to main repo
+        run: |
+          rsync -av --delete \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            service-repo/ main-repo/${{ inputs.service_name }}/
+
+      - name: Commit and push to main repo dev branch
+        working-directory: main-repo
+        run: |
+          git config user.name "kubeguard-ci-bot"
+          git config user.email "ci-bot@kubeguard.local"
+          git add ${{ inputs.service_name }}/
+          if git diff --staged --quiet; then
+            echo "No changes to sync"
+            exit 0
+          fi
+          git commit -m "sync(${{ inputs.service_name }}): ${{ needs.build.outputs.image_tag }}"
+          git push origin dev
+
   deploy-dev:
     needs: build
     if: needs.build.outputs.status == 'success'
