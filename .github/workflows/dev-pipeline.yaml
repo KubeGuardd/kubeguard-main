@@ -1,0 +1,107 @@
+name: Reusable - Dev Pipeline (Build, Scan, Push, Deploy)
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        required: true
+        type: string
+      dockerfile_path:
+        required: false
+        type: string
+        default: "./Dockerfile"
+      build_context:
+        required: false
+        type: string
+        default: "."
+      working_directory:
+        required: false
+        type: string
+        default: "."
+      sonar_project_key:
+        required: false
+        type: string
+        default: ""
+      notification_recipients:
+        required: true
+        type: string
+    secrets:
+      ACR_LOGIN_SERVER:
+        required: true
+      ACR_USERNAME:
+        required: true
+      ACR_PASSWORD:
+        required: true
+      SONAR_TOKEN:
+        required: false
+      SNYK_TOKEN:
+        required: false
+      HELM_REPO_PAT:
+        required: true
+      SMTP_SERVER:
+        required: true
+      SMTP_PORT:
+        required: true
+      SMTP_USERNAME:
+        required: true
+      SMTP_PASSWORD:
+        required: true
+
+jobs:
+  build:
+    uses: KubeGuardd/kubeguard-main/.github/workflows/build-and-scan.yaml@main
+    with:
+      service_name: ${{ inputs.service_name }}
+      dockerfile_path: ${{ inputs.dockerfile_path }}
+      build_context: ${{ inputs.build_context }}
+      working_directory: ${{ inputs.working_directory }}
+      sonar_project_key: ${{ inputs.sonar_project_key }}
+    secrets:
+      ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+      ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+      ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  deploy-dev:
+    needs: build
+    if: needs.build.outputs.status == 'success'
+    uses: KubeGuardd/kubeguard-main/.github/workflows/update-helm-values.yaml@main
+    with:
+      service_name: ${{ inputs.service_name }}
+      image_tag: ${{ needs.build.outputs.image_tag }}
+      target_environment: dev
+    secrets:
+      HELM_REPO_PAT: ${{ secrets.HELM_REPO_PAT }}
+
+  notify-success:
+    needs: [build, deploy-dev]
+    if: needs.build.outputs.status == 'success' && needs.deploy-dev.outputs.status == 'success'
+    uses: KubeGuardd/kubeguard-main/.github/workflows/notify.yaml@main
+    with:
+      service_name: ${{ inputs.service_name }}
+      stage: "build + dev-deploy"
+      status: success
+      image_tag: ${{ needs.build.outputs.image_tag }}
+      recipients: ${{ inputs.notification_recipients }}
+    secrets:
+      SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+
+  notify-failure:
+    needs: [build, deploy-dev]
+    if: always() && (needs.build.outputs.status == 'failure' || needs.deploy-dev.outputs.status == 'failure')
+    uses: KubeGuardd/kubeguard-main/.github/workflows/notify.yaml@main
+    with:
+      service_name: ${{ inputs.service_name }}
+      stage: "build + dev-deploy"
+      status: failure
+      image_tag: ${{ needs.build.outputs.image_tag || 'n/a' }}
+      recipients: ${{ inputs.notification_recipients }}
+    secrets:
+      SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}

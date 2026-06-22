@@ -1,0 +1,87 @@
+name: Reusable - Update Helm Values
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        required: true
+        type: string
+      image_tag:
+        required: true
+        type: string
+      target_environment:
+        required: true
+        type: string
+      helm_repo:
+        required: false
+        type: string
+        default: "KubeGuardd/kubeguard-helm"
+      helm_repo_ref:
+        required: false
+        type: string
+        default: "main"
+    secrets:
+      HELM_REPO_PAT:
+        required: true
+    outputs:
+      commit_sha:
+        value: ${{ jobs.update.outputs.commit_sha }}
+      status:
+        value: ${{ jobs.update.outputs.status }}
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.commit.outputs.sha }}
+      status: ${{ steps.final-status.outputs.result }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.helm_repo }}
+          ref: ${{ inputs.helm_repo_ref }}
+          token: ${{ secrets.HELM_REPO_PAT }}
+          path: helm-repo
+
+      - run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - id: bump
+        run: |
+          FILE="helm-repo/${{ inputs.service_name }}/values-${{ inputs.target_environment }}.yaml"
+          yq -i ".image.tag = \"${{ inputs.image_tag }}\"" "$FILE"
+
+      - id: commit
+        working-directory: helm-repo
+        run: |
+          git config user.name "kubeguard-ci-bot"
+          git config user.email "ci-bot@kubeguard.local"
+
+          if git diff --quiet; then
+            echo "sha=no-change" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git add "${{ inputs.service_name }}/values-${{ inputs.target_environment }}.yaml"
+          git commit -m "deploy(${{ inputs.service_name }}): ${{ inputs.target_environment }} -> ${{ inputs.image_tag }}"
+
+          for attempt in 1 2 3; do
+            if git push; then
+              break
+            fi
+            git pull --rebase
+            sleep 2
+          done
+
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - id: final-status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+          fi
