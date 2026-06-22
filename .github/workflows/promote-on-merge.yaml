@@ -3,11 +3,14 @@ name: Promote on Merge
 on:
   pull_request:
     types: [closed]
-    branches: [main]
+    branches:
+      - main
+
+  workflow_dispatch:
 
 jobs:
   promote:
-    if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'dev'
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     uses: KubeGuardd/kubeguard-main/.github/workflows/promote-prod.yaml@main
     secrets:
       ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
