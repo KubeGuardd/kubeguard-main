@@ -1,0 +1,104 @@
+name: Promote Service to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      service_name:
+        description: "Select service to promote"
+        required: true
+        type: choice
+        options:
+          - gateway
+          - frontend
+          - analysis-service
+          - auth-service
+          - scan-service
+      version:
+        description: "Image tag/version to promote to production"
+        required: true
+        type: string
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Helm repo
+        uses: actions/checkout@v4
+        with:
+          repository: KubeGuardd/kubeguard-helm
+          token: ${{ secrets.HELM_REPO_PAT }}
+          path: helm-repo
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Update prod values file
+        working-directory: helm-repo
+        run: |
+          SERVICE="${{ github.event.inputs.service_name }}"
+          VERSION="${{ github.event.inputs.version }}"
+          FILE="$SERVICE/values-prod.yaml"
+
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: $FILE not found in kubeguard-helm repo"
+            exit 1
+          fi
+
+          OLD_TAG=$(yq '.image.tag' "$FILE")
+
+          echo "Service: $SERVICE"
+          echo "Old image tag: $OLD_TAG"
+          echo "New image tag: $VERSION"
+
+          yq -i ".image.tag = \"$VERSION\"" "$FILE"
+
+          git config user.name "kubeguard-ci-bot"
+          git config user.email "ci-bot@kubeguard.local"
+
+          if git diff --quiet; then
+            echo "No change. $SERVICE already has image tag $VERSION"
+            exit 0
+          fi
+
+          git add "$FILE"
+          git commit -m "promote($SERVICE): prod -> $VERSION"
+          git push
+
+      - name: Notify success
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "✅ [KubeGuard CI] ${{ github.event.inputs.service_name }} production promotion succeeded"
+          to: ${{ secrets.NOTIFICATION_RECIPIENTS }}
+          from: KubeGuard CI <${{ secrets.SMTP_USERNAME }}>
+          html_body: |
+            <h2>Production Promotion Succeeded</h2>
+            <p><strong>Service:</strong> ${{ github.event.inputs.service_name }}</p>
+            <p><strong>Image tag:</strong> ${{ github.event.inputs.version }}</p>
+            <p><strong>Triggered by:</strong> ${{ github.actor }}</p>
+            <p><a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">View workflow run</a></p>
+
+      - name: Notify failure
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "❌ [KubeGuard CI] ${{ github.event.inputs.service_name }} production promotion failed"
+          to: ${{ secrets.NOTIFICATION_RECIPIENTS }}
+          from: KubeGuard CI <${{ secrets.SMTP_USERNAME }}>
+          html_body: |
+            <h2>Production Promotion Failed</h2>
+            <p><strong>Service:</strong> ${{ github.event.inputs.service_name }}</p>
+            <p><strong>Requested image tag:</strong> ${{ github.event.inputs.version }}</p>
+            <p><strong>Triggered by:</strong> ${{ github.actor }}</p>
+            <p><a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">View workflow run</a></p>
