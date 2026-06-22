@@ -1,0 +1,191 @@
+name: Reusable - Promote to Production
+
+on:
+  workflow_call:
+    inputs:
+      main_repo:
+        required: false
+        type: string
+        default: "KubeGuardd/kubeguard-main"
+      helm_repo:
+        required: false
+        type: string
+        default: "KubeGuardd/kubeguard-helm"
+      acr_login_server_input:
+        required: false
+        type: string
+        default: ""
+    secrets:
+      ACR_LOGIN_SERVER:
+        required: true
+      ACR_USERNAME:
+        required: true
+      ACR_PASSWORD:
+        required: true
+      HELM_REPO_PAT:
+        required: true
+      SMTP_SERVER:
+        required: true
+      SMTP_PORT:
+        required: true
+      SMTP_USERNAME:
+        required: true
+      SMTP_PASSWORD:
+        required: true
+      NOTIFICATION_RECIPIENTS:
+        required: true
+
+jobs:
+  detect-changed-services:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.detect.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: detect
+        run: |
+          CHANGED_FOLDERS=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} \
+            | grep -v '^.github/' \
+            | cut -d/ -f1 \
+            | sort -u \
+            | grep -v -E '^(README.md|.gitignore|.env.example)$' || true)
+
+          SERVICES_JSON=$(echo "$CHANGED_FOLDERS" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "services=${SERVICES_JSON}" >> "$GITHUB_OUTPUT"
+          echo "Changed services: ${SERVICES_JSON}"
+
+  promote:
+    needs: detect-changed-services
+    if: needs.detect-changed-services.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-changed-services.outputs.services) }}
+      fail-fast: false
+    outputs:
+      status: ${{ steps.final-status.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.helm_repo }}
+          token: ${{ secrets.HELM_REPO_PAT }}
+          path: helm-repo
+
+      - run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - id: read-dev-tag
+        run: |
+          FILE="helm-repo/${{ matrix.service }}/values-dev.yaml"
+          if [ ! -f "$FILE" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          DEV_TAG=$(yq '.image.tag' "$FILE")
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "dev_tag=${DEV_TAG}" >> "$GITHUB_OUTPUT"
+
+      - id: bump-version
+        if: steps.read-dev-tag.outputs.skip == 'false'
+        run: |
+          VERSION_FILE="helm-repo/${{ matrix.service }}/VERSION"
+          if [ -f "$VERSION_FILE" ]; then
+            CURRENT=$(cat "$VERSION_FILE")
+          else
+            CURRENT="0.0.0"
+          fi
+
+          MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+          MINOR=$(echo "$CURRENT" | cut -d. -f2)
+          PATCH=$(echo "$CURRENT" | cut -d. -f3)
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+
+          echo "$NEW_VERSION" > "$VERSION_FILE"
+          echo "new_version=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Promoting ${{ matrix.service }}: ${CURRENT} -> ${NEW_VERSION}"
+
+      - uses: docker/login-action@v3
+        if: steps.read-dev-tag.outputs.skip == 'false'
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - id: retag
+        if: steps.read-dev-tag.outputs.skip == 'false'
+        run: |
+          SOURCE="${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.service }}:${{ steps.read-dev-tag.outputs.dev_tag }}"
+          TARGET="${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.service }}:${{ steps.bump-version.outputs.new_version }}"
+
+          docker pull "$SOURCE"
+          docker tag "$SOURCE" "$TARGET"
+          docker push "$TARGET"
+
+          echo "Promoted: $SOURCE -> $TARGET"
+
+      - id: update-prod
+        if: steps.read-dev-tag.outputs.skip == 'false'
+        run: |
+          FILE="helm-repo/${{ matrix.service }}/values-prod.yaml"
+          yq -i ".image.tag = \"${{ steps.bump-version.outputs.new_version }}\"" "$FILE"
+
+      - id: commit
+        if: steps.read-dev-tag.outputs.skip == 'false'
+        working-directory: helm-repo
+        run: |
+          git config user.name "kubeguard-ci-bot"
+          git config user.email "ci-bot@kubeguard.local"
+          git add "${{ matrix.service }}/values-prod.yaml" "${{ matrix.service }}/VERSION"
+          git commit -m "promote(${{ matrix.service }}): prod -> ${{ steps.bump-version.outputs.new_version }}"
+
+          for attempt in 1 2 3; do
+            if git push; then
+              break
+            fi
+            git pull --rebase
+            sleep 2
+          done
+
+      - id: final-status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+          fi
+
+  notify-success:
+    needs: [detect-changed-services, promote]
+    if: needs.promote.result == 'success'
+    uses: KubeGuardd/kubeguard-main/.github/workflows/notify.yaml@main
+    with:
+      service_name: ${{ join(fromJson(needs.detect-changed-services.outputs.services), ', ') }}
+      stage: "promote-prod"
+      status: success
+      recipients: ${{ secrets.NOTIFICATION_RECIPIENTS }}
+    secrets:
+      SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+
+  notify-failure:
+    needs: [detect-changed-services, promote]
+    if: always() && needs.promote.result == 'failure'
+    uses: KubeGuardd/kubeguard-main/.github/workflows/notify.yaml@main
+    with:
+      service_name: ${{ join(fromJson(needs.detect-changed-services.outputs.services), ', ') }}
+      stage: "promote-prod"
+      status: failure
+      recipients: ${{ secrets.NOTIFICATION_RECIPIENTS }}
+    secrets:
+      SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
