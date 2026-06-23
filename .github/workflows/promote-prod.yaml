@@ -10,9 +10,10 @@ on:
         options:
           - gateway
           - frontend
+          - project-service
+          - watcher-service
           - analysis-service
-          - auth-service
-          - scan-service
+          - notification-service
 
       version:
         description: "New production version tag, example: v1.0.0"
