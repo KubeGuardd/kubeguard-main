@@ -98,7 +98,14 @@ jobs:
             exit 0
           fi
           git commit -m "sync(${{ inputs.service_name }}): ${{ needs.build.outputs.image_tag }}"
-          git push origin dev
+
+          for attempt in 1 2 3; do
+            if git push origin dev; then
+              break
+            fi
+            git pull --rebase origin dev
+            sleep 2
+          done
 
   deploy-dev:
     needs: build
