@@ -1,53 +1,63 @@
 name: Promote Service to Production
 
 on:
-  workflow_dispatch:
-    inputs:
-      service_name:
-        description: "Select service to promote"
-        required: true
-        type: choice
-        options:
-          - gateway
-          - frontend
-          - project-service
-          - watcher-service
-          - analysis-service
-          - notification-service
-
-      version:
-        description: "New production version tag, example: v1.0.0"
-        required: true
-        type: string
+  pull_request:
+    types: [closed]
+    branches: [main]
 
 jobs:
   promote:
+    if: github.event.pull_request.merged == true
+
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Helm repo
-        uses: actions/checkout@v4
-        with:
-          repository: KubeGuardd/kubeguard-helm
-          token: ${{ secrets.HELM_REPO_PAT }}
-          path: helm-repo
-      - name: Validate version format
+      - name: Parse service and version from PR title
+        id: parse
         run: |
-          if ! [[ "${{ github.event.inputs.version }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "ERROR: version must match vX.Y.Z (e.g. v1.2.3)"
+          TITLE="${{ github.event.pull_request.title }}"
+          echo "PR title: $TITLE"
+
+          # Expected format: promote: <service> <version>
+          # Example: promote: frontend v1.2.0
+          if ! [[ "$TITLE" =~ ^promote:\ ([a-z0-9-]+)\ (v[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Not a promotion PR (title does not match 'promote: <service> v<version>'). Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          SERVICE="${BASH_REMATCH[1]}"
+          VERSION="${BASH_REMATCH[2]}"
+
+          VALID_SERVICES="gateway frontend project-service watcher-service analysis-service notification-service"
+          if ! echo "$VALID_SERVICES" | grep -qw "$SERVICE"; then
+            echo "ERROR: '$SERVICE' is not a recognized service name"
             exit 1
           fi
 
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "service=$SERVICE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Parsed: service=$SERVICE version=$VERSION"
+
+      - name: Checkout Helm repo
+        if: steps.parse.outputs.skip == 'false'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.HELM_REPO_PAT }}
+
       - name: Install yq
+        if: steps.parse.outputs.skip == 'false'
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
       - name: Read dev image tag
+        if: steps.parse.outputs.skip == 'false'
         id: devtag
-        working-directory: helm-repo
         run: |
-          SERVICE="${{ github.event.inputs.service_name }}"
+          SERVICE="${{ steps.parse.outputs.service }}"
           DEV_FILE="$SERVICE/values-dev.yaml"
 
           if [ ! -f "$DEV_FILE" ]; then
@@ -66,6 +76,7 @@ jobs:
           echo "Dev tag found: $DEV_TAG"
 
       - name: Docker login to ACR
+        if: steps.parse.outputs.skip == 'false'
         uses: docker/login-action@v3
         with:
           registry: ${{ secrets.ACR_LOGIN_SERVER }}
@@ -73,10 +84,11 @@ jobs:
           password: ${{ secrets.ACR_PASSWORD }}
 
       - name: Pull dev image, retag and push prod image
+        if: steps.parse.outputs.skip == 'false'
         run: |
-          SERVICE="${{ github.event.inputs.service_name }}"
+          SERVICE="${{ steps.parse.outputs.service }}"
           DEV_TAG="${{ steps.devtag.outputs.dev_tag }}"
-          PROD_TAG="${{ github.event.inputs.version }}"
+          PROD_TAG="${{ steps.parse.outputs.version }}"
 
           SOURCE_IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/$SERVICE:$DEV_TAG"
           PROD_IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/$SERVICE:$PROD_TAG"
@@ -91,10 +103,10 @@ jobs:
           docker push "$PROD_IMAGE"
 
       - name: Update prod values file
-        working-directory: helm-repo
+        if: steps.parse.outputs.skip == 'false'
         run: |
-          SERVICE="${{ github.event.inputs.service_name }}"
-          PROD_TAG="${{ github.event.inputs.version }}"
+          SERVICE="${{ steps.parse.outputs.service }}"
+          PROD_TAG="${{ steps.parse.outputs.version }}"
           PROD_FILE="$SERVICE/values-prod.yaml"
 
           if [ ! -f "$PROD_FILE" ]; then
@@ -123,38 +135,39 @@ jobs:
           git push
 
       - name: Notify success
-        if: success()
+        if: steps.parse.outputs.skip == 'false' && success()
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
           server_port: ${{ secrets.SMTP_PORT }}
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "✅ [KubeGuard CI] ${{ github.event.inputs.service_name }} production promotion succeeded"
+          subject: "✅ [KubeGuard CI] ${{ steps.parse.outputs.service }} production promotion succeeded"
           to: ${{ secrets.NOTIFICATION_RECIPIENTS }}
           from: KubeGuard CI <${{ secrets.SMTP_USERNAME }}>
           html_body: |
             <h2>Production Promotion Succeeded</h2>
-            <p><strong>Service:</strong> ${{ github.event.inputs.service_name }}</p>
+            <p><strong>Service:</strong> ${{ steps.parse.outputs.service }}</p>
             <p><strong>Dev source tag:</strong> ${{ steps.devtag.outputs.dev_tag }}</p>
-            <p><strong>Production tag:</strong> ${{ github.event.inputs.version }}</p>
-            <p><strong>Triggered by:</strong> ${{ github.actor }}</p>
+            <p><strong>Production tag:</strong> ${{ steps.parse.outputs.version }}</p>
+            <p><strong>PR:</strong> #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}</p>
+            <p><strong>Merged by:</strong> ${{ github.event.pull_request.merged_by.login }}</p>
             <p><a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">View workflow run</a></p>
 
       - name: Notify failure
-        if: failure()
+        if: steps.parse.outputs.skip == 'false' && failure()
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
           server_port: ${{ secrets.SMTP_PORT }}
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "❌ [KubeGuard CI] ${{ github.event.inputs.service_name }} production promotion failed"
+          subject: "❌ [KubeGuard CI] ${{ steps.parse.outputs.service }} production promotion failed"
           to: ${{ secrets.NOTIFICATION_RECIPIENTS }}
           from: KubeGuard CI <${{ secrets.SMTP_USERNAME }}>
           html_body: |
             <h2>Production Promotion Failed</h2>
-            <p><strong>Service:</strong> ${{ github.event.inputs.service_name }}</p>
-            <p><strong>Requested production tag:</strong> ${{ github.event.inputs.version }}</p>
-            <p><strong>Triggered by:</strong> ${{ github.actor }}</p>
+            <p><strong>Service:</strong> ${{ steps.parse.outputs.service }}</p>
+            <p><strong>Requested production tag:</strong> ${{ steps.parse.outputs.version }}</p>
+            <p><strong>PR:</strong> #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}</p>
             <p><a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">View workflow run</a></p>
