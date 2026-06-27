@@ -44,6 +44,7 @@ jobs:
         if: steps.parse.outputs.skip == 'false'
         uses: actions/checkout@v4
         with:
+          repository: KubeGuardd/kubeguard-helm
           ref: main
           token: ${{ secrets.HELM_REPO_PAT }}
 
