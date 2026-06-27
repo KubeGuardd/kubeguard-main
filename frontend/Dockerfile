@@ -1,3 +1,4 @@
+# Build stage
 FROM node:20-alpine AS builder
 WORKDIR /app
 
@@ -12,11 +13,15 @@ ENV VITE_AZURE_REDIRECT_URI=$VITE_AZURE_REDIRECT_URI
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --omit=dev
 COPY . .
 RUN npm run build
 
+
 FROM nginx:1.27-alpine
+
+RUN apk upgrade --no-cache
+
 RUN rm -rf /etc/nginx/conf.d/*
 
 COPY --from=builder /app/dist /usr/share/nginx/html
