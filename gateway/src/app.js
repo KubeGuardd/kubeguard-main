@@ -78,8 +78,22 @@ app.use((req, res, next) => {
   return jsonParser(req, res, next)
 })
 
+const healthResponse = (status) => ({
+  status,
+  service: 'gateway',
+  timestamp: new Date().toISOString()
+})
+
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'gateway', timestamp: new Date().toISOString() })
+  res.status(200).json(healthResponse('ok'))
+})
+
+app.get('/healthz', (req, res) => {
+  res.status(200).json(healthResponse('ok'))
+})
+
+app.get('/ready', (req, res) => {
+  res.status(200).json(healthResponse('ready'))
 })
 
 app.use('/api/auth', authLimiter, authRouter)
