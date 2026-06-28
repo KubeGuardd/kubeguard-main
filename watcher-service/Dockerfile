@@ -14,7 +14,7 @@ COPY package*.json ./
 
 RUN chown -R appuser:appgroup /app
 
-USER appuser
+USER appuser    
 
 EXPOSE 3002
 CMD ["node", "src/index.js"]
