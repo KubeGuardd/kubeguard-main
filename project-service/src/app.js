@@ -23,13 +23,25 @@ app.use(
   })
 )
 
+const healthResponse = (status) => ({
+  status,
+  service: 'project-service',
+  timestamp: new Date().toISOString(),
+  db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+})
+
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'project-service',
-    timestamp: new Date().toISOString(),
-    db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-  })
+  res.status(200).json(healthResponse('ok'))
+})
+
+app.get('/healthz', (req, res) => {
+  res.status(200).json(healthResponse('ok'))
+})
+
+app.get('/ready', (req, res) => {
+  const isDbReady = mongoose.connection.readyState === 1
+
+  res.status(isDbReady ? 200 : 503).json(healthResponse(isDbReady ? 'ready' : 'not-ready'))
 })
 
 app.use('/internal', internalRoutes)
