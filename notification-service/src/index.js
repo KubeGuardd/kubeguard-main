@@ -58,8 +58,10 @@ async function start() {
     process.on('SIGTERM', () => shutdown('SIGTERM'))
     process.on('SIGINT', () => shutdown('SIGINT'))
   } catch (error) {
-    logger.error(`Startup failed: ${error.message}`)
-    process.exit(1)
+    console.error(error);
+    console.error(error.stack);
+    logger.error(`Startup failed: ${error.message}`);
+    process.exit(1);
   }
 }
 
