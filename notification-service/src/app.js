@@ -23,15 +23,33 @@ app.use(
 app.use(morgan('dev'))
 app.use(express.json({ limit: '2mb' }))
 
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'notification-service',
-    timestamp: new Date().toISOString(),
-    db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-  })
+const healthResponse = (status) => ({
+  status,
+  service: 'notification-service',
+  timestamp: new Date().toISOString(),
+  db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
 })
 
+app.get('/health', (req, res) => {
+  const isDbReady = mongoose.connection.readyState === 1
+  res.status(isDbReady ? 200 : 503).json(
+    healthResponse(isDbReady ? 'ok' : 'degraded')
+  )
+})
+
+app.get('/healthz', (req, res) => {
+  const isDbReady = mongoose.connection.readyState === 1
+  res.status(isDbReady ? 200 : 503).json(
+    healthResponse(isDbReady ? 'ok' : 'degraded')
+  )
+})
+
+app.get('/ready', (req, res) => {
+  const isDbReady = mongoose.connection.readyState === 1
+  res.status(isDbReady ? 200 : 503).json(
+    healthResponse(isDbReady ? 'ready' : 'not-ready')
+  )
+})
 app.use('/notify', notifyRoutes)
 
 app.use((req, res) => {
