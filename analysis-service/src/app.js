@@ -24,13 +24,32 @@ app.use(
 app.use(morgan('dev'))
 app.use(express.json({ limit: '2mb' }))
 
+const healthResponse = (status) => ({
+  status,
+  service: 'analysis-service',
+  timestamp: new Date().toISOString(),
+  db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+})
+
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'analysis-service',
-    timestamp: new Date().toISOString(),
-    db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-  })
+  const isDbReady = mongoose.connection.readyState === 1
+  res.status(isDbReady ? 200 : 503).json(
+    healthResponse(isDbReady ? 'ok' : 'degraded')
+  )
+})
+
+app.get('/healthz', (req, res) => {
+  const isDbReady = mongoose.connection.readyState === 1
+  res.status(isDbReady ? 200 : 503).json(
+    healthResponse(isDbReady ? 'ok' : 'degraded')
+  )
+})
+
+app.get('/ready', (req, res) => {
+  const isDbReady = mongoose.connection.readyState === 1
+  res.status(isDbReady ? 200 : 503).json(
+    healthResponse(isDbReady ? 'ready' : 'not-ready')
+  )
 })
 
 app.use('/internal', internalRoutes)
