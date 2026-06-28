@@ -25,13 +25,32 @@ app.use(
   })
 )
 
+const healthResponse = (status) => ({
+  status,
+  service: 'watcher-service',
+  timestamp: new Date().toISOString(),
+  db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+})
+
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'watcher-service',
-    timestamp: new Date().toISOString(),
-    db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-  })
+  const isDbReady = mongoose.connection.readyState === 1
+  res.status(isDbReady ? 200 : 503).json(
+    healthResponse(isDbReady ? 'ok' : 'degraded')
+  )
+})
+
+app.get('/healthz', (req, res) => {
+  const isDbReady = mongoose.connection.readyState === 1
+  res.status(isDbReady ? 200 : 503).json(
+    healthResponse(isDbReady ? 'ok' : 'degraded')
+  )
+})
+
+app.get('/ready', (req, res) => {
+  const isDbReady = mongoose.connection.readyState === 1
+  res.status(isDbReady ? 200 : 503).json(
+    healthResponse(isDbReady ? 'ready' : 'not-ready')
+  )
 })
 
 app.use('/webhook', webhookRoutes)
