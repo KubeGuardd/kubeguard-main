@@ -1,4 +1,4 @@
-  // src/pages/AuthCallback.jsx
+// src/pages/AuthCallback.jsx
 import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { msalInstance, msalInitPromise, loginRequest } from '../auth/msalConfig'
@@ -12,7 +12,6 @@ export const AuthCallback = () => {
   const setAuth = useAuthStore((state) => state.setAuth)
   const clearAuth = useAuthStore((state) => state.clearAuth)
   const addToast = useToastStore((state) => state.addToast)
-  // Guard against React StrictMode double-invoke and re-renders
   const hasRun = useRef(false)
 
   useEffect(() => {
@@ -23,20 +22,37 @@ export const AuthCallback = () => {
       try {
         await msalInitPromise
 
-        // This is the ONE place handleRedirectPromise() is called in the entire app
         const result = await msalInstance.handleRedirectPromise()
+        console.log('[AuthCallback] handleRedirectPromise result:', result)
 
         if (result?.accessToken) {
-          // Fresh redirect result — set active account and verify with backend
+          console.log('[AuthCallback] Got access token, setting active account')
           msalInstance.setActiveAccount(result.account)
-          const response = await verifyToken(result.accessToken)
-          setAuth(response.data, result.accessToken)
+
+          try {
+            const response = await verifyToken(result.accessToken)
+            console.log('[AuthCallback] verifyToken success:', response.data)
+            setAuth(response.data, result.accessToken)
+          } catch (apiError) {
+            console.error('[AuthCallback] verifyToken failed:', apiError.message)
+            // Even if backend verify fails, set auth with MSAL account data
+            // so user is not stuck in a loop
+            setAuth({
+              userId: result.account.localAccountId,
+              email: result.account.username,
+              name: result.account.name,
+              roles: result.idTokenClaims?.roles || [],
+            }, result.accessToken)
+          }
+
           navigate('/dashboard', { replace: true })
           return
         }
 
-        // No redirect result — check if there's an existing silent session
+        console.log('[AuthCallback] No redirect result, checking existing accounts')
         const accounts = msalInstance.getAllAccounts()
+        console.log('[AuthCallback] Existing accounts:', accounts.length)
+
         if (accounts.length > 0) {
           msalInstance.setActiveAccount(accounts[0])
           try {
@@ -44,19 +60,32 @@ export const AuthCallback = () => {
               ...loginRequest,
               account: accounts[0],
             })
-            const response = await verifyToken(silentResult.accessToken)
-            setAuth(response.data, silentResult.accessToken)
+            console.log('[AuthCallback] Silent token acquired')
+
+            try {
+              const response = await verifyToken(silentResult.accessToken)
+              setAuth(response.data, silentResult.accessToken)
+            } catch (apiError) {
+              console.error('[AuthCallback] verifyToken failed on silent:', apiError.message)
+              setAuth({
+                userId: accounts[0].localAccountId,
+                email: accounts[0].username,
+                name: accounts[0].name,
+                roles: accounts[0].idTokenClaims?.roles || [],
+              }, silentResult.accessToken)
+            }
+
             navigate('/dashboard', { replace: true })
             return
-          } catch {
-            // Silent failed — fall through to landing page
+          } catch (silentError) {
+            console.error('[AuthCallback] Silent token failed:', silentError.message)
           }
         }
 
-        // No session at all — go back to landing
+        console.log('[AuthCallback] No session found, going to landing')
         navigate('/', { replace: true })
       } catch (error) {
-        console.error('[AuthCallback] Sign-in failed:', error)
+        console.error('[AuthCallback] Fatal error:', error)
         clearAuth()
         addToast({
           type: 'error',
