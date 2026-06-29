@@ -1,4 +1,4 @@
-// src/pages/AuthCallback.jsx
+  // src/pages/AuthCallback.jsx
 import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { msalInstance, msalInitPromise, loginRequest } from '../auth/msalConfig'
