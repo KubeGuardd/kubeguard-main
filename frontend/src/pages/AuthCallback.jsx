@@ -1,4 +1,5 @@
-import { useEffect } from 'react'
+// src/pages/AuthCallback.jsx
+import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { msalInstance, msalInitPromise, loginRequest } from '../auth/msalConfig'
 import { verifyToken } from '../services/api'
@@ -11,20 +12,34 @@ export const AuthCallback = () => {
   const setAuth = useAuthStore((state) => state.setAuth)
   const clearAuth = useAuthStore((state) => state.clearAuth)
   const addToast = useToastStore((state) => state.addToast)
+  // Guard against React StrictMode double-invoke and re-renders
+  const hasRun = useRef(false)
 
   useEffect(() => {
+    if (hasRun.current) return
+    hasRun.current = true
+
     const completeSignIn = async () => {
       try {
-        // Wait for the single shared initialization — never call initialize() again
         await msalInitPromise
 
+        // This is the ONE place handleRedirectPromise() is called in the entire app
         const result = await msalInstance.handleRedirectPromise()
 
-        if (!result?.accessToken) {
-          // No redirect result — try acquiring token silently from existing session
-          const accounts = msalInstance.getAllAccounts()
-          if (accounts.length > 0) {
-            msalInstance.setActiveAccount(accounts[0])
+        if (result?.accessToken) {
+          // Fresh redirect result — set active account and verify with backend
+          msalInstance.setActiveAccount(result.account)
+          const response = await verifyToken(result.accessToken)
+          setAuth(response.data, result.accessToken)
+          navigate('/dashboard', { replace: true })
+          return
+        }
+
+        // No redirect result — check if there's an existing silent session
+        const accounts = msalInstance.getAllAccounts()
+        if (accounts.length > 0) {
+          msalInstance.setActiveAccount(accounts[0])
+          try {
             const silentResult = await msalInstance.acquireTokenSilent({
               ...loginRequest,
               account: accounts[0],
@@ -33,16 +48,13 @@ export const AuthCallback = () => {
             setAuth(response.data, silentResult.accessToken)
             navigate('/dashboard', { replace: true })
             return
+          } catch {
+            // Silent failed — fall through to landing page
           }
-          // Truly no session — go back to landing
-          navigate('/', { replace: true })
-          return
         }
 
-        // We have a fresh token from the redirect
-        const response = await verifyToken(result.accessToken)
-        setAuth(response.data, result.accessToken)
-        navigate('/dashboard', { replace: true })
+        // No session at all — go back to landing
+        navigate('/', { replace: true })
       } catch (error) {
         console.error('[AuthCallback] Sign-in failed:', error)
         clearAuth()

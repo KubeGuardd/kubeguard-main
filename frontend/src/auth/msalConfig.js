@@ -1,3 +1,4 @@
+// src/auth/msalConfig.js
 import { LogLevel, PublicClientApplication } from '@azure/msal-browser'
 
 const CLIENT_ID = import.meta.env.VITE_AZURE_CLIENT_ID || 'c4a7882d-0496-4404-b13a-e0f5ed77822e'
@@ -7,14 +8,16 @@ export const msalConfig = {
   auth: {
     clientId: CLIENT_ID,
     authority: `https://login.microsoftonline.com/${TENANT_ID}`,
-    redirectUri: import.meta.env.VITE_AZURE_REDIRECT_URI || window.location.origin,
+    redirectUri: `${window.location.origin}/auth/callback`, // Always land on /auth/callback
     postLogoutRedirectUri: window.location.origin,
+    navigateToLoginRequestUrl: false, // Critical: prevents MSAL re-navigating after redirect
   },
   cache: {
     cacheLocation: 'sessionStorage',
     storeAuthStateInCookie: false,
   },
   system: {
+    allowNativeBroker: false,
     loggerOptions: {
       loggerCallback: (level, message, containsPii) => {
         if (containsPii) return
