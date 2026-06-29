@@ -1,7 +1,7 @@
 # Build stage
 FROM node:20-alpine AS builder
 WORKDIR /app
-              
+
 ARG VITE_AZURE_CLIENT_ID
 ARG VITE_AZURE_TENANT_ID
 ARG VITE_AZURE_REDIRECT_URI
