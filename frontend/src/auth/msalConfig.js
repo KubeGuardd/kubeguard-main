@@ -8,7 +8,7 @@ export const msalConfig = {
   auth: {
     clientId: CLIENT_ID,
     authority: `https://login.microsoftonline.com/${TENANT_ID}`,
-    redirectUri: `${window.location.origin}/auth/callback`, // Always land on /auth/callback
+    redirectUri: 'https://kubeguard.hmsclinic.online/auth/callback', // Always land on /auth/callback
     postLogoutRedirectUri: window.location.origin,
     navigateToLoginRequestUrl: false, // Critical: prevents MSAL re-navigating after redirect
   },
