@@ -1,3 +1,4 @@
+// src/hooks/useAuth.js
 import { useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import { msalInstance, msalInitPromise, loginRequest } from '../auth/msalConfig'
@@ -9,23 +10,16 @@ export const useAuth = () => {
   const location = useLocation()
 
   useEffect(() => {
-    // If we're on the callback page, do nothing.
-    // AuthCallback.jsx owns that route entirely.
+    // AuthCallback.jsx owns the redirect handling — do nothing on that route
+    // Also do nothing if already authenticated — prevents re-running on every navigation
     if (location.pathname === '/auth/callback') return
 
     const tryRestoreSession = async () => {
       try {
         await msalInitPromise
 
-        // Handle any pending redirect first (e.g. if user lands on / after redirect)
-        const redirectResult = await msalInstance.handleRedirectPromise()
-        if (redirectResult?.accessToken) {
-          const response = await verifyToken(redirectResult.accessToken)
-          setAuth(response.data, redirectResult.accessToken)
-          return
-        }
-
-        // No redirect — try silent token from existing session
+        // NEVER call handleRedirectPromise() here — AuthCallback owns that.
+        // Only try silent token restoration from an existing session.
         const accounts = msalInstance.getAllAccounts()
         if (accounts.length === 0) {
           clearAuth()
@@ -48,5 +42,7 @@ export const useAuth = () => {
     }
 
     tryRestoreSession()
-  }, [location.pathname, setAuth, clearAuth, setLoading])
+    // Run ONLY once on mount — not on every route change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 }

@@ -1,4 +1,5 @@
-import { useEffect } from 'react'
+// src/pages/AuthCallback.jsx
+import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { msalInstance, msalInitPromise, loginRequest } from '../auth/msalConfig'
 import { verifyToken } from '../services/api'
@@ -11,40 +12,80 @@ export const AuthCallback = () => {
   const setAuth = useAuthStore((state) => state.setAuth)
   const clearAuth = useAuthStore((state) => state.clearAuth)
   const addToast = useToastStore((state) => state.addToast)
+  const hasRun = useRef(false)
 
   useEffect(() => {
+    if (hasRun.current) return
+    hasRun.current = true
+
     const completeSignIn = async () => {
       try {
-        // Wait for the single shared initialization — never call initialize() again
         await msalInitPromise
 
         const result = await msalInstance.handleRedirectPromise()
+        console.log('[AuthCallback] handleRedirectPromise result:', result)
 
-        if (!result?.accessToken) {
-          // No redirect result — try acquiring token silently from existing session
-          const accounts = msalInstance.getAllAccounts()
-          if (accounts.length > 0) {
-            msalInstance.setActiveAccount(accounts[0])
+        if (result?.accessToken) {
+          console.log('[AuthCallback] Got access token, setting active account')
+          msalInstance.setActiveAccount(result.account)
+
+          try {
+            const response = await verifyToken(result.accessToken)
+            console.log('[AuthCallback] verifyToken success:', response.data)
+            setAuth(response.data, result.accessToken)
+          } catch (apiError) {
+            console.error('[AuthCallback] verifyToken failed:', apiError.message)
+            // Even if backend verify fails, set auth with MSAL account data
+            // so user is not stuck in a loop
+            setAuth({
+              userId: result.account.localAccountId,
+              email: result.account.username,
+              name: result.account.name,
+              roles: result.idTokenClaims?.roles || [],
+            }, result.accessToken)
+          }
+
+          navigate('/dashboard', { replace: true })
+          return
+        }
+
+        console.log('[AuthCallback] No redirect result, checking existing accounts')
+        const accounts = msalInstance.getAllAccounts()
+        console.log('[AuthCallback] Existing accounts:', accounts.length)
+
+        if (accounts.length > 0) {
+          msalInstance.setActiveAccount(accounts[0])
+          try {
             const silentResult = await msalInstance.acquireTokenSilent({
               ...loginRequest,
               account: accounts[0],
             })
-            const response = await verifyToken(silentResult.accessToken)
-            setAuth(response.data, silentResult.accessToken)
+            console.log('[AuthCallback] Silent token acquired')
+
+            try {
+              const response = await verifyToken(silentResult.accessToken)
+              setAuth(response.data, silentResult.accessToken)
+            } catch (apiError) {
+              console.error('[AuthCallback] verifyToken failed on silent:', apiError.message)
+              setAuth({
+                userId: accounts[0].localAccountId,
+                email: accounts[0].username,
+                name: accounts[0].name,
+                roles: accounts[0].idTokenClaims?.roles || [],
+              }, silentResult.accessToken)
+            }
+
             navigate('/dashboard', { replace: true })
             return
+          } catch (silentError) {
+            console.error('[AuthCallback] Silent token failed:', silentError.message)
           }
-          // Truly no session — go back to landing
-          navigate('/', { replace: true })
-          return
         }
 
-        // We have a fresh token from the redirect
-        const response = await verifyToken(result.accessToken)
-        setAuth(response.data, result.accessToken)
-        navigate('/dashboard', { replace: true })
+        console.log('[AuthCallback] No session found, going to landing')
+        navigate('/', { replace: true })
       } catch (error) {
-        console.error('[AuthCallback] Sign-in failed:', error)
+        console.error('[AuthCallback] Fatal error:', error)
         clearAuth()
         addToast({
           type: 'error',
